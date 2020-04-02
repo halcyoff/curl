@@ -123,6 +123,7 @@ my $base = 8990; # base port number
 my $minport;     # minimum used port number
 my $maxport;     # maximum used port number
 
+my $MQTTPORT;            # MQTT server port
 my $HTTPPORT;            # HTTP server port
 my $HTTP6PORT;           # HTTP IPv6 server port
 my $HTTPSPORT;           # HTTPS (stunnel) server port
@@ -414,7 +415,7 @@ sub init_serverpidfile_hash {
     }
   }
   for my $proto (('tftp', 'sftp', 'socks', 'ssh', 'rtsp', 'gopher', 'httptls',
-                  'dict', 'smb', 'smbs', 'telnet')) {
+                  'dict', 'smb', 'smbs', 'telnet', 'mqtt')) {
     for my $ipvnum ((4, 6)) {
       for my $idnum ((1, 2)) {
         my $serv = servername_id($proto, $ipvnum, $idnum);
@@ -2165,6 +2166,62 @@ sub runsshserver {
 #######################################################################
 # Start the socks server
 #
+sub runmqttserver {
+    my ($id, $verbose, $ipv6) = @_;
+    my $ip=$HOSTIP;
+    my $port = $MQTTPORT;
+    my $proto = 'mqtt';
+    my $ipvnum = 4;
+    my $idnum = ($id && ($id =~ /^(\d+)$/) && ($id > 1)) ? $id : 1;
+    my $server;
+    my $srvrname;
+    my $pidfile;
+    my $logfile;
+    my $flags = "";
+
+    $server = servername_id($proto, $ipvnum, $idnum);
+    $pidfile = $serverpidfile{$server};
+
+    # don't retry if the server doesn't work
+    if ($doesntrun{$pidfile}) {
+        return (0,0);
+    }
+
+    my $pid = processexists($pidfile);
+    if($pid > 0) {
+        stopserver($server, "$pid");
+    }
+    unlink($pidfile) if(-f $pidfile);
+
+    $srvrname = servername_str($proto, $ipvnum, $idnum);
+
+    $logfile = server_logfilename($LOGDIR, $proto, $ipvnum, $idnum);
+
+    # start our socks server, get commands from the FTP cmd file
+    my $cmd="server/mqttd".exe_ext('SRV').
+        " --port $port ".
+        " --pidfile $pidfile".
+        " --config $FTPDCMD";
+    my ($sockspid, $pid2) = startnew($cmd, $pidfile, 30, 0);
+
+    if($sockspid <= 0 || !pidexists($sockspid)) {
+        # it is NOT alive
+        logmsg "RUN: failed to start the $srvrname server\n";
+        stopserver($server, "$pid2");
+        $doesntrun{$pidfile} = 1;
+        return (0,0);
+    }
+
+    if($verbose) {
+        logmsg "RUN: $srvrname server is now running PID $pid2\n";
+    }
+
+    return ($pid2, $sockspid);
+}
+
+#######################################################################
+# Start the socks server
+#
 sub runsocksserver {
     my ($id, $verbose, $ipv6) = @_;
     my $ip=$HOSTIP;
@@ -3122,6 +3179,7 @@ sub subVariables {
   $$thing =~ s/%HTTP2PORT/$HTTP2PORT/g;
   $$thing =~ s/%HTTPPORT/$HTTPPORT/g;
   $$thing =~ s/%PROXYPORT/$HTTPPROXYPORT/g;
+  $$thing =~ s/%MQTTPORT/$MQTTPORT/g;
 
   $$thing =~ s/%IMAP6PORT/$IMAP6PORT/g;
   $$thing =~ s/%IMAPPORT/$IMAPPORT/g;
@@ -4793,6 +4851,16 @@ sub startservers {
                 $run{'socks'}="$pid $pid2";
             }
         }
+        elsif($what eq "mqtt" ) {
+            if(!$run{'mqtt'}) {
+                ($pid, $pid2) = runmqttserver("", $verbose);
+                if($pid <= 0) {
+                    return "failed starting mqtt server";
+                }
+                printf ("* pid mqtt => %d %d\n", $pid, $pid2) if($verbose);
+                $run{'mqtt'}="$pid $pid2";
+            }
+        }
         elsif($what eq "http-unix") {
             if($torture && $run{'http-unix'} &&
                !responsive_http_server("http", $verbose, "unix", $HTTPUNIXPATH)) {
@@ -5360,6 +5428,7 @@ $DICTPORT        = $base++; # DICT port
 $SMBPORT         = $base++; # SMB port
 $SMBSPORT        = $base++; # SMBS port
 $NEGTELNETPORT   = $base++; # TELNET port with negotiation
+$MQTTPORT        = $base++; # MQTT port
 $HTTPUNIXPATH    = 'http.sock'; # HTTP server Unix domain socket path
 
 $maxport         = $base-1; # updated base port number
