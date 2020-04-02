@@ -541,7 +541,8 @@ static curl_socket_t mqttit(curl_socket_t fd)
         filename = test2file(testno);
         stream = fopen(filename, "rb");
         error = getpart(&data, &datalen, "reply", "data", stream);
-        publish(fd, packet_id, topic, data, datalen);
+        if(!error)
+          publish(fd, packet_id, topic, data, datalen);
       }
       else {
         char *def = (char *)"this is random payload yes yes it is";
